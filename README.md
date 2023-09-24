@@ -3,7 +3,7 @@
 [![](https://jitpack.io/v/morannlx/libhza.svg)](https://jitpack.io/#morannlx/libhza)
 
 
-##How to build your Magisk-hza
+## How to build your Magisk-hza
 
 先这样再那样就可以了
 
