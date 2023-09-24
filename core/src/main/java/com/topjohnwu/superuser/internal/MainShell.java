@@ -101,10 +101,10 @@ public final class MainShell {
     }
 
     public static Shell.Job newJob(boolean hza, InputStream in) {
-        return new PendingJob(su).add(in);
+        return new PendingJob(hza).add(in);
     }
 
     public static Shell.Job newJob(boolean hza, String... cmds) {
-        return new PendingJob(su).add(cmds);
+        return new PendingJob(hza).add(cmds);
     }
 }
