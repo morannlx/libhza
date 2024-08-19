@@ -1,6 +1,6 @@
-# libsu
+# libhza
 
-[![](https://jitpack.io/v/topjohnwu/libsu.svg)](https://jitpack.io/#topjohnwu/libsu)
+[![](https://jitpack.io/v/morannlx/libhza.svg)](https://jitpack.io/#morannlx/libhza)
 
 An Android library providing a complete solution for apps using root permissions.
 
@@ -27,13 +27,13 @@ dependencies {
     def libsuVersion = '6.0.0'
 
     // The core module that provides APIs to a shell
-    implementation "com.github.topjohnwu.libsu:core:${libsuVersion}"
+    implementation "com.github.morannlx:libhza:core:${libsuVersion}"
 
     // Optional: APIs for creating root services. Depends on ":core"
-    implementation "com.github.topjohnwu.libsu:service:${libsuVersion}"
+    implementation "com.github.morannlx:libhza:service:${libsuVersion}"
 
     // Optional: Provides remote file system support
-    implementation "com.github.topjohnwu.libsu:nio:${libsuVersion}"
+    implementation "com.github.morannlx:libhza:nio:${libsuVersion}"
 }
 ```
 
