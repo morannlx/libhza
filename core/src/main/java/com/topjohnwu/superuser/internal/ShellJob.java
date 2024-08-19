@@ -19,81 +19,47 @@ package com.topjohnwu.superuser.internal;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import com.topjohnwu.superuser.NoShellException;
 import com.topjohnwu.superuser.Shell;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
 
-class PendingJob extends JobTask {
+class ShellJob extends JobTask {
 
-    @Nullable
-    private Runnable retryTask;
+    @NonNull
+    private final ShellImpl shell;
 
-    PendingJob() {
-        to(UNSET_LIST);
-    }
-
-    @Override
-    public void shellDied() {
-        if (retryTask != null) {
-            Runnable r = retryTask;
-            retryTask = null;
-            r.run();
-        } else {
-            super.shellDied();
-        }
-    }
-
-    private void exec0() {
-        ShellImpl shell;
-        try {
-            shell = MainShell.get();
-        } catch (NoShellException e) {
-            super.shellDied();
-            return;
-        }
-        try {
-            shell.execTask(this);
-        } catch (IOException ignored) { /* JobTask does not throw */ }
+    ShellJob(@NonNull ShellImpl s) {
+        shell = s;
     }
 
     @NonNull
     @Override
     public Shell.Result exec() {
-        retryTask = this::exec0;
         ResultHolder holder = new ResultHolder();
         callback = holder;
         callbackExecutor = null;
-        exec0();
+        try {
+            shell.execTask(this);
+        } catch (IOException ignored) { /* JobTask does not throw */ }
         return holder.getResult();
     }
 
-    private void submit0() {
-        MainShell.get(null, s -> {
-            ShellImpl shell = (ShellImpl) s;
-            shell.submitTask(this);
-        });
+    @Override
+    public void submit(@Nullable Executor executor, @Nullable Shell.ResultCallback cb) {
+        callbackExecutor = executor;
+        callback = cb;
+        shell.submitTask(this);
     }
 
     @NonNull
     @Override
     public Future<Shell.Result> enqueue() {
-        retryTask = this::submit0;
         ResultFuture future = new ResultFuture();
         callback = future;
         callbackExecutor = null;
-        submit0();
+        shell.submitTask(this);
         return future;
-    }
-
-    @Override
-    public void submit(@Nullable Executor executor, @Nullable Shell.ResultCallback cb) {
-        retryTask = this::submit0;
-        callbackExecutor = executor;
-        callback = cb;
-        submit0();
     }
 }

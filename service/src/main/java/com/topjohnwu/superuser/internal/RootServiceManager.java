@@ -150,10 +150,6 @@ public class RootServiceManager implements Handler.Callback {
     private Shell.Task startRootProcess(ComponentName name, String action) {
         Context context = Utils.getContext();
 
-        if (Utils.hasStartupAgents(context)) {
-            Log.e(TAG, JVMTI_ERROR);
-        }
-
         if ((flags & RECEIVER_REGISTERED) == 0) {
             // Register receiver to receive binder from root process
             IntentFilter filter = new IntentFilter(RECEIVER_BROADCAST);
@@ -172,6 +168,10 @@ public class RootServiceManager implements Handler.Callback {
         }
 
         return (stdin, stdout, stderr) -> {
+            if (Utils.hasStartupAgents(context)) {
+                Log.e(TAG, JVMTI_ERROR);
+            }
+
             Context ctx = Utils.getDeContext();
             File mainJar = new File(ctx.getCacheDir(), "main.jar");
 
@@ -198,6 +198,10 @@ public class RootServiceManager implements Handler.Callback {
                 } else {
                     params = API_28_DEBUG;
                 }
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                params += " -Xnoimage-dex2oat";
             }
 
             final String niceNameCmd;

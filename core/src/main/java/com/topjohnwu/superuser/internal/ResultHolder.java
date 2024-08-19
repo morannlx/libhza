@@ -17,31 +17,22 @@
 package com.topjohnwu.superuser.internal;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import com.topjohnwu.superuser.Shell;
 
-import java.util.Collections;
-import java.util.List;
+class ResultHolder implements Shell.ResultCallback {
 
-class ResultImpl extends Shell.Result {
-    List<String> out;
-    List<String> err;
-    int code = JOB_NOT_EXECUTED;
+    @Nullable
+    private Shell.Result result;
 
-    @NonNull
     @Override
-    public List<String> getOut() {
-        return out == null ? Collections.emptyList() : out;
+    public void onResult(@NonNull Shell.Result out) {
+        result = out;
     }
 
     @NonNull
-    @Override
-    public List<String> getErr() {
-        return err == null ? Collections.emptyList() : err;
-    }
-
-    @Override
-    public int getCode() {
-        return code;
+    Shell.Result getResult() {
+        return result == null ? new ResultImpl() : result;
     }
 }

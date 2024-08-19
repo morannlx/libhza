@@ -2,15 +2,6 @@
 
 [![](https://jitpack.io/v/morannlx/libhza.svg)](https://jitpack.io/#morannlx/libhza)
 
-
-## How to build your Magisk-hza
-
-先这样再那样就可以了
-
-
-
-
-
 An Android library providing a complete solution for apps using root permissions.
 
 `libsu` comes with 2 main components: the `core` module handles the creation of the Unix (root) shell process and wraps it with high level, robust Java APIs; the `service` module handles the launching, binding, and management of root services over IPC, allowing you to run Java/Kotlin and C/C++ code (via JNI) with root permissions.
@@ -33,16 +24,16 @@ repositories {
     maven { url 'https://jitpack.io' }
 }
 dependencies {
-    def libsuVersion = '5.2.1'
+    def libsuVersion = '6.0.0'
 
     // The core module that provides APIs to a shell
-    implementation "com.github.topjohnwu.libsu:core:${libsuVersion}"
+    implementation "com.github.morannlx:libhza:core:${libsuVersion}"
 
     // Optional: APIs for creating root services. Depends on ":core"
-    implementation "com.github.topjohnwu.libsu:service:${libsuVersion}"
+    implementation "com.github.morannlx:libhza:service:${libsuVersion}"
 
     // Optional: Provides remote file system support
-    implementation "com.github.topjohnwu.libsu:nio:${libsuVersion}"
+    implementation "com.github.morannlx:libhza:nio:${libsuVersion}"
 }
 ```
 
@@ -61,23 +52,21 @@ public class SplashActivity extends Activity {
         // Set settings before the main shell can be created
         Shell.enableVerboseLogging = BuildConfig.DEBUG;
         Shell.setDefaultBuilder(Shell.Builder.create()
-            .setFlags(Shell.FLAG_REDIRECT_STDERR)
-            .setTimeout(10)
-        );
+            .setFlags(Shell.FLAG_MOUNT_MASTER)
+            .setInitializers(ShellInit.class)
+            .setTimeout(10));
     }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // Preheat the main root shell in the splash screen
-        // so the app can use it afterwards without interrupting
-        // application flow (e.g. root permission prompt)
+        showSplashScreen();
+        // As an example, preload the main root shell in the splash screen
+        // so the app can use it afterwards without interrupting application
+        // flow (e.g. waiting for root permission prompt)
         Shell.getShell(shell -> {
             // The main shell is now constructed and cached
-            // Exit splash screen and enter main activity
-            Intent intent = new Intent(this, MainActivity.class);
-            startActivity(intent);
-            finish();
+            exitSplashScreen();
         });
     }
 }
@@ -104,8 +93,9 @@ boolean ok = result.isSuccess();     // return code == 0?
 // Async APIs
 Shell.cmd("setenforce 0").submit();   // submit and don't care results
 Shell.cmd("sleep 5", "echo hello").submit(result -> updateUI(result));
+Future<Shell.Result> futureResult = Shell.cmd("sleep 5", "echo hello").enqueue();
 
-// Run tasks and output to specific Lists
+// Run commands and output to specific Lists
 List<String> mmaps = new ArrayList<>();
 Shell.cmd("cat /proc/1/maps").to(mmaps).exec();
 List<String> stdout = new ArrayList<>();
