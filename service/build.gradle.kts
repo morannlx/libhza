@@ -18,12 +18,10 @@ android {
 }
 
 android.libraryVariants.all {
-    val variantName = name
-    val variantCapped = variantName.replaceFirstChar { it.uppercaseChar() }
-    val jarTask = tasks.register("create${variantCapped}MainJar") {
+    val jarTask = tasks.register("create${name.capitalize()}MainJar") {
         doLast {
-            val classDir = Paths.get(layout.buildDirectory.get().asFile.path, "intermediates",
-                "javac", variantName, "compile${variantCapped}JavaWithJavac", "classes",
+            val classDir = Paths.get(buildDir.path, "intermediates",
+                "javac", this@all.name, "classes",
                 "com", "topjohnwu", "superuser", "internal")
 
             val classFiles = Files.list(classDir).use { stream ->
@@ -42,7 +40,7 @@ android.libraryVariants.all {
             if (Files.notExists(output.parent))
                 Files.createDirectories(output.parent)
 
-            val pgConf = layout.buildDirectory.file("mainJar.pro").get().asFile
+            val pgConf = File(buildDir, "mainJar.pro")
 
             PrintStream(pgConf.outputStream()).use {
                 it.println("-keep class com.topjohnwu.superuser.internal.RootServerMain")

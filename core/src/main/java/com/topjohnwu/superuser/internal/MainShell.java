@@ -1,5 +1,5 @@
 /*
- * Copyright 2024 John "topjohnwu" Wu
+ * Copyright 2023 John "topjohnwu" Wu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,9 +44,6 @@ public final class MainShell {
     public static synchronized ShellImpl get() {
         ShellImpl shell = getCached();
         if (shell == null) {
-            if (isInitMain) {
-                throw new NoShellException("The main shell died during initialization");
-            }
             isInitMain = true;
             if (mainBuilder == null)
                 mainBuilder = new BuilderImpl();
@@ -82,10 +79,8 @@ public final class MainShell {
     public static ShellImpl getCached() {
         synchronized (mainShell) {
             ShellImpl s = mainShell[0];
-            if (s != null && s.getStatus() < 0) {
-                s = null;
+            if (s != null && s.getStatus() < 0)
                 mainShell[0] = null;
-            }
             return s;
         }
     }
@@ -105,11 +100,11 @@ public final class MainShell {
         mainBuilder = (BuilderImpl) builder;
     }
 
-    public static Shell.Job newJob(InputStream in) {
-        return new PendingJob().add(in);
+    public static Shell.Job newJob(boolean su, InputStream in) {
+        return new PendingJob(su).add(in);
     }
 
-    public static Shell.Job newJob(String... cmds) {
-        return new PendingJob().add(cmds);
+    public static Shell.Job newJob(boolean su, String... cmds) {
+        return new PendingJob(su).add(cmds);
     }
 }

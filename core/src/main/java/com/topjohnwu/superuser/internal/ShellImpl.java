@@ -1,5 +1,5 @@
 /*
- * Copyright 2024 John "topjohnwu" Wu
+ * Copyright 2023 John "topjohnwu" Wu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,7 +21,6 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import android.text.TextUtils;
 
 import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 
 import com.topjohnwu.superuser.Shell;
 import com.topjohnwu.superuser.ShellUtils;
@@ -34,53 +33,28 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.util.ArrayDeque;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.FutureTask;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.ReentrantLock;
+
+class ShellTerminatedException extends IOException {
+
+    ShellTerminatedException() {
+        super("Shell terminated unexpectedly");
+    }
+}
 
 class ShellImpl extends Shell {
-    private volatile int status;
+    private int status;
 
-    private final Process process;
+    final ExecutorService executor;
+    final boolean redirect;
+    private final Process proc;
     private final NoCloseOutputStream STDIN;
     private final NoCloseInputStream STDOUT;
     private final NoCloseInputStream STDERR;
-
-    // Guarded by scheduleLock
-    private final ReentrantLock scheduleLock = new ReentrantLock();
-    private final Condition idle = scheduleLock.newCondition();
-    private final ArrayDeque<Task> tasks = new ArrayDeque<>();
-    private boolean isRunningTask = false;
-
-    private static final class SyncTask implements Task {
-
-        private final Condition condition;
-        private boolean set = false;
-
-        SyncTask(Condition c) {
-            condition = c;
-        }
-
-        void signal() {
-            set = true;
-            condition.signal();
-        }
-
-        void await() {
-            while (!set) {
-                try {
-                    condition.await();
-                } catch (InterruptedException ignored) {}
-            }
-        }
-
-        @Override
-        public void run(OutputStream stdin, InputStream stdout, InputStream stderr) {}
-    }
 
     private static class NoCloseInputStream extends FilterInputStream {
 
@@ -117,16 +91,17 @@ class ShellImpl extends Shell {
         }
     }
 
-    ShellImpl(BuilderImpl builder, Process proc) throws IOException {
+    ShellImpl(BuilderImpl builder, Process process) throws IOException {
         status = UNKNOWN;
-        process = proc;
-        STDIN = new NoCloseOutputStream(proc.getOutputStream());
-        STDOUT = new NoCloseInputStream(proc.getInputStream());
-        STDERR = new NoCloseInputStream(proc.getErrorStream());
+        redirect = builder.hasFlags(FLAG_REDIRECT_STDERR);
+        proc = process;
+        STDIN = new NoCloseOutputStream(process.getOutputStream());
+        STDOUT = new NoCloseInputStream(process.getInputStream());
+        STDERR = new NoCloseInputStream(process.getErrorStream());
+        executor = new SerialExecutorService();
 
         // Shell checks might get stuck indefinitely
-        FutureTask<Integer> check = new FutureTask<>(this::shellCheck);
-        EXECUTOR.execute(check);
+        Future<Integer> check = executor.submit(this::shellCheck);
         try {
             try {
                 status = check.get(builder.timeout, TimeUnit.SECONDS);
@@ -143,6 +118,7 @@ class ShellImpl extends Shell {
                 throw new IOException("Shell check interrupted", e);
             }
         } catch (IOException e) {
+            executor.shutdownNow();
             release();
             throw e;
         }
@@ -150,7 +126,7 @@ class ShellImpl extends Shell {
 
     private Integer shellCheck() throws IOException {
         try {
-            process.exitValue();
+            proc.exitValue();
             throw new IOException("Created process has terminated");
         } catch (IllegalThreadStateException ignored) {
             // Process is alive
@@ -189,30 +165,28 @@ class ShellImpl extends Shell {
         try { STDIN.close0(); } catch (IOException ignored) {}
         try { STDERR.close0(); } catch (IOException ignored) {}
         try { STDOUT.close0(); } catch (IOException ignored) {}
-        process.destroy();
+        proc.destroy();
     }
 
     @Override
     public boolean waitAndClose(long timeout, @NonNull TimeUnit unit) throws InterruptedException {
         if (status < 0)
             return true;
-
-        scheduleLock.lock();
-        try {
-            if (isRunningTask && !idle.await(timeout, unit))
-                return false;
-            close();
-        } finally {
-            scheduleLock.unlock();
+        executor.shutdown();
+        if (executor.awaitTermination(timeout, unit)) {
+            release();
+            return true;
+        } else {
+            status = UNKNOWN;
+            return false;
         }
-
-        return true;
     }
 
     @Override
     public void close() {
         if (status < 0)
             return;
+        executor.shutdownNow();
         release();
     }
 
@@ -228,9 +202,8 @@ class ShellImpl extends Shell {
             return false;
 
         try {
-            process.exitValue();
+            proc.exitValue();
             // Process is dead, shell is not alive
-            release();
             return false;
         } catch (IllegalThreadStateException e) {
             // Process is still running
@@ -238,11 +211,10 @@ class ShellImpl extends Shell {
         }
     }
 
-    private synchronized void exec0(@NonNull Task task) throws IOException {
-        if (status < 0) {
-            task.shellDied();
-            return;
-        }
+    @Override
+    public synchronized void execTask(@NonNull Task task) throws IOException {
+        if (status < 0)
+            throw new ShellTerminatedException();
 
         ShellUtils.cleanInputStream(STDOUT);
         ShellUtils.cleanInputStream(STDERR);
@@ -250,85 +222,18 @@ class ShellImpl extends Shell {
             STDIN.write('\n');
             STDIN.flush();
         } catch (IOException e) {
+            // Shell is dead
             release();
-            task.shellDied();
-            return;
+            throw new ShellTerminatedException();
         }
 
         task.run(STDIN, STDOUT, STDERR);
     }
 
-    private void processTasks() {
-        Task task;
-        while ((task = processNextTask(false)) != null) {
-            try {
-                exec0(task);
-            } catch (IOException ignored) {}
-        }
-    }
-
-    @Nullable
-    private Task processNextTask(boolean fromExec) {
-        scheduleLock.lock();
-        try {
-            final Task task = tasks.poll();
-            if (task == null) {
-                isRunningTask = false;
-                idle.signalAll();
-                return null;
-            }
-            if (task instanceof SyncTask) {
-                ((SyncTask) task).signal();
-                return null;
-            }
-            if (fromExec) {
-                // Put the task back in front of the queue
-                tasks.offerFirst(task);
-            } else {
-                return task;
-            }
-        } finally {
-            scheduleLock.unlock();
-        }
-        EXECUTOR.execute(this::processTasks);
-        return null;
-    }
-
-    @Override
-    public void submitTask(@NonNull Task task) {
-        scheduleLock.lock();
-        try {
-            tasks.offer(task);
-            if (!isRunningTask) {
-                isRunningTask = true;
-                EXECUTOR.execute(this::processTasks);
-            }
-        } finally {
-            scheduleLock.unlock();
-        }
-    }
-
-    @Override
-    public void execTask(@NonNull Task task) throws IOException {
-        scheduleLock.lock();
-        try {
-            if (isRunningTask) {
-                SyncTask sync = new SyncTask(scheduleLock.newCondition());
-                tasks.offer(sync);
-                // Wait until it's our turn
-                sync.await();
-            }
-            isRunningTask = true;
-        } finally {
-            scheduleLock.unlock();
-        }
-        exec0(task);
-        processNextTask(true);
-    }
-
     @NonNull
     @Override
     public Job newJob() {
-        return new ShellJob(this);
+        return new JobImpl(this);
     }
+
 }

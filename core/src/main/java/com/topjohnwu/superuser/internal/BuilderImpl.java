@@ -18,7 +18,6 @@ package com.topjohnwu.superuser.internal;
 
 import static com.topjohnwu.superuser.Shell.FLAG_MOUNT_MASTER;
 import static com.topjohnwu.superuser.Shell.FLAG_NON_ROOT_SHELL;
-import static com.topjohnwu.superuser.Shell.FLAG_REDIRECT_STDERR;
 
 import android.content.Context;
 import android.text.TextUtils;
@@ -39,7 +38,6 @@ public final class BuilderImpl extends Shell.Builder {
     long timeout = 20;
     private int flags = 0;
     private Shell.Initializer[] initializers;
-    private String[] command;
 
     boolean hasFlags(int mask) {
         return (flags & mask) == mask;
@@ -59,13 +57,6 @@ public final class BuilderImpl extends Shell.Builder {
         return this;
     }
 
-    @NonNull
-    @Override
-    public Shell.Builder setCommands(String... c) {
-        command = c;
-        return this;
-    }
-
     public void setInitializersImpl(Class<? extends Shell.Initializer>[] clz) {
         initializers = new Shell.Initializer[clz.length];
         for (int i = 0; i < clz.length; ++i) {
@@ -79,13 +70,15 @@ public final class BuilderImpl extends Shell.Builder {
         }
     }
 
-    private ShellImpl start() {
+    @NonNull
+    @Override
+    public ShellImpl build() {
         ShellImpl shell = null;
 
         // Root mount master
         if (!hasFlags(FLAG_NON_ROOT_SHELL) && hasFlags(FLAG_MOUNT_MASTER)) {
             try {
-                shell = exec("su", "--mount-master");
+                shell = build("hza", "--mount-master");
                 if (!shell.isRoot())
                     shell = null;
             } catch (NoShellException ignore) {}
@@ -94,7 +87,7 @@ public final class BuilderImpl extends Shell.Builder {
         // Normal root shell
         if (shell == null && !hasFlags(FLAG_NON_ROOT_SHELL)) {
             try {
-                shell = exec("su");
+                shell = build("hza");
                 if (!shell.isRoot()) {
                     shell = null;
                 }
@@ -106,13 +99,15 @@ public final class BuilderImpl extends Shell.Builder {
             if (!hasFlags(FLAG_NON_ROOT_SHELL)) {
                 Utils.setConfirmedRootState(false);
             }
-            shell = exec("sh");
+            shell = build("sh");
         }
 
         return shell;
     }
 
-    private ShellImpl exec(String... commands) {
+    @NonNull
+    @Override
+    public ShellImpl build(String... commands) {
         try {
             Utils.log(TAG, "exec " + TextUtils.join(" ", commands));
             Process process = Runtime.getRuntime().exec(commands);
@@ -133,9 +128,6 @@ public final class BuilderImpl extends Shell.Builder {
             Utils.ex(e);
             throw new NoShellException("Unable to create a shell!", e);
         }
-        if (hasFlags(FLAG_REDIRECT_STDERR)) {
-            Shell.enableLegacyStderrRedirection = true;
-        }
         MainShell.setCached(shell);
         if (initializers != null) {
             Context ctx = Utils.getContext();
@@ -147,15 +139,5 @@ public final class BuilderImpl extends Shell.Builder {
             }
         }
         return shell;
-    }
-
-    @NonNull
-    @Override
-    public ShellImpl build() {
-        if (command != null) {
-            return exec(command);
-        } else {
-            return start();
-        }
     }
 }

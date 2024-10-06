@@ -1,5 +1,5 @@
 /*
- * Copyright 2024 John "topjohnwu" Wu
+ * Copyright 2023 John "topjohnwu" Wu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.concurrent.FutureTask;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 class ShellPipeStream {
@@ -58,8 +58,7 @@ class ShellPipeStream {
             });
 
             // Open the fifo only after the shell request
-            FutureTask<InputStream> stream = new FutureTask<>(() -> new FileInputStream(fifo));
-            Shell.EXECUTOR.execute(stream);
+            Future<InputStream> stream = Shell.EXECUTOR.submit(() -> new FileInputStream(fifo));
             return stream.get(FIFO_TIMEOUT, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             if (e instanceof FileNotFoundException)
@@ -105,8 +104,7 @@ class ShellPipeStream {
             });
 
             // Open the fifo only after the shell request
-            FutureTask<OutputStream> stream = new FutureTask<>(() -> new FileOutputStream(fifo));
-            Shell.EXECUTOR.execute(stream);
+            Future<OutputStream> stream = Shell.EXECUTOR.submit(() -> new FileOutputStream(fifo));
             return stream.get(FIFO_TIMEOUT, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             if (e instanceof FileNotFoundException)

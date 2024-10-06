@@ -1,5 +1,5 @@
 /*
- * Copyright 2024 John "topjohnwu" Wu
+ * Copyright 2023 John "topjohnwu" Wu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,6 +37,7 @@ import java.lang.annotation.Retention;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -96,7 +97,22 @@ public abstract class Shell implements Closeable {
     public static final int FLAG_MOUNT_MASTER = (1 << 1);
 
     /* Preserve (1 << 2) due to historical reasons */
-    /* Preserve (1 << 3) due to historical reasons */
+
+    /**
+     * If set, STDERR outputs will be redirected to STDOUT outputs.
+     * <p>
+     * Note: This flag only affects the following methods:
+     * <ul>
+     *     <li>{@link #cmd(String...)}</li>
+     *     <li>{@link #cmd(InputStream)}</li>
+     *     <li>{@link Job#to(List)}</li>
+     * </ul>
+     * Check the descriptions of each method above for more details.
+     * <p>
+     * Constant value {@value}.
+     */
+    public static final int FLAG_REDIRECT_STDERR = (1 << 3);
+
     /* Preserve (1 << 4) due to historical reasons */
 
     @Retention(SOURCE)
@@ -104,33 +120,19 @@ public abstract class Shell implements Closeable {
     @interface ConfigFlags {}
 
     /**
-     * The {@link Executor} that manages all worker threads used in {@code libsu}.
+     * The {@link ExecutorService} that manages all worker threads used in {@code libsu}.
      * <p>
-     * Note: If the developer decides to replace the default Executor, keep in mind that
+     * Note: If the developer decides to replace the default ExecutorService, keep in mind that
      * each {@code Shell} instance requires at least 3 threads to operate properly.
      */
     @NonNull
-    public static Executor EXECUTOR = Executors.newCachedThreadPool();
+    public static ExecutorService EXECUTOR = Executors.newCachedThreadPool();
+
 
     /**
      * Set to {@code true} to enable verbose logging throughout the library.
      */
     public static boolean enableVerboseLogging = false;
-
-    /**
-     * This flag exists for compatibility reasons. DO NOT use unless necessary.
-     * <p>
-     * If enabled, STDERR outputs will be redirected to the STDOUT output list
-     * when a {@link Job} is configured with {@link Job#to(List)}.
-     * Since the {@code Shell.cmd(...)} methods are functionally equivalent to
-     * {@code Shell.getShell().newJob().add(...).to(new ArrayList<>())}, this variable
-     * also affects the behavior of those methods.
-     * <p>
-     * Note: The recommended way to redirect STDERR output to STDOUT is to assign the
-     * same list to both STDOUT and STDERR with {@link Job#to(List, List)}.
-     * The behavior of this flag is unintuitive and error prone.
-     */
-    public static boolean enableLegacyStderrRedirection = false;
 
     /**
      * Override the default {@link Builder}.
@@ -236,7 +238,7 @@ public abstract class Shell implements Closeable {
      */
     @NonNull
     public static Job cmd(@NonNull String... commands) {
-        return MainShell.newJob(commands);
+        return MainShell.newJob(false, commands);
     }
 
     /**
@@ -255,7 +257,7 @@ public abstract class Shell implements Closeable {
      */
     @NonNull
     public static Job cmd(@NonNull InputStream in) {
-        return MainShell.newJob(in);
+        return MainShell.newJob(false, in);
     }
 
     /* ***************
@@ -282,13 +284,6 @@ public abstract class Shell implements Closeable {
      * @throws IOException I/O errors when doing operations with STDIN/STDOUT/STDERR
      */
     public abstract void execTask(@NonNull Task task) throws IOException;
-
-    /**
-     * Submits a low-level {@link Task} for execution in a queue of the shell.
-     * @param task the desired task.
-     * @see #execTask(Task)
-     */
-    public abstract void submitTask(@NonNull Task task);
 
     /**
      * Construct a new {@link Job} that uses the shell for execution.
@@ -387,10 +382,12 @@ public abstract class Shell implements Closeable {
         }
 
         /**
-         * Set flags to control how a new {@code Shell} will be constructed.
+         * Set flags that controls how {@code Shell} works and how a new {@code Shell} will be
+         * constructed.
          * @param flags the desired flags.
          *              Value is either 0 or bitwise-or'd value of
-         *              {@link #FLAG_NON_ROOT_SHELL} or {@link #FLAG_MOUNT_MASTER}
+         *              {@link #FLAG_NON_ROOT_SHELL}, {@link #FLAG_MOUNT_MASTER}, or
+         *              {@link #FLAG_REDIRECT_STDERR}
          * @return this Builder object for chaining of calls.
          */
         @NonNull
@@ -407,15 +404,6 @@ public abstract class Shell implements Closeable {
          */
         @NonNull
         public abstract Builder setTimeout(long timeout);
-
-        /**
-         * Set the commands that will be used to create a new {@code Shell}.
-         * @param commands commands that will be passed to {@link Runtime#exec(String[])} to create
-         *                 a new {@link Process}.
-         * @return this Builder object for chaining of calls.
-         */
-        @NonNull
-        public abstract Builder setCommands(String... commands);
 
         /**
          * Set the {@link Context} to use when creating a shell.
@@ -438,10 +426,11 @@ public abstract class Shell implements Closeable {
         }
 
         /**
-         * Combine all of the options that have been set and build a new {@code Shell} instance.
+         * Combine all of the options that have been set and build a new {@code Shell} instance
+         * with the default methods.
          * <p>
-         * If not {@link #setCommands(String...)}, there are 3 methods to construct a Unix shell;
-         * if any method fails, it will fallback to the next method:
+         * There are 3 methods to construct a Unix shell; if any method fails, it will fallback to
+         * the next method:
          * <ol>
          *     <li>If {@link #FLAG_NON_ROOT_SHELL} is not set and {@link #FLAG_MOUNT_MASTER}
          *     is set, construct a Unix shell by calling {@code su --mount-master}.
@@ -453,11 +442,7 @@ public abstract class Shell implements Closeable {
          *     conditions, but should it fail, it will throw {@link NoShellException}</li>
          * </ol>
          * The developer should check the status of the returned {@code Shell} with
-         * {@link #getStatus()} since it may be constructed with calling {@code sh}.
-         * <p>
-         * If {@link #setCommands(String...)} is called, the provided commands will be used to
-         * create a new {@link Process} directly. If the process fails to create, or the process
-         * is not a valid shell, it will throw {@link NoShellException}.
+         * {@link #getStatus()} since it may be constructed with any of the 3 possible methods.
          * @return the created {@code Shell} instance.
          * @throws NoShellException impossible to construct a {@link Shell} instance, or
          * initialization failed when using the configured {@link Initializer}s.
@@ -475,9 +460,7 @@ public abstract class Shell implements Closeable {
          * initialization failed when using the configured {@link Initializer}s.
          */
         @NonNull
-        public final Shell build(String... commands) {
-            return setCommands(commands).build();
-        }
+        public abstract Shell build(String... commands);
 
         /**
          * Combine all of the options that have been set and build a new {@code Shell} instance
@@ -545,12 +528,16 @@ public abstract class Shell implements Closeable {
     public abstract static class Job {
 
         /**
-         * Store output of STDOUT to a specific list.
-         * @param stdout the list to store STDOUT. Pass {@code null} to omit all outputs.
+         * Store output to a specific list.
+         * <p>
+         * Output of STDERR will be also be stored in the same {@link List} if the flag
+         * {@link #FLAG_REDIRECT_STDERR} is set; {@link Result#getErr()}
+         * will always return an empty list.
+         * @param output the list to store outputs. Pass {@code null} to omit all outputs.
          * @return this Job object for chaining of calls.
          */
         @NonNull
-        public abstract Job to(@Nullable List<String> stdout);
+        public abstract Job to(@Nullable List<String> output);
 
         /**
          * Store output of STDOUT and STDERR to specific lists.
@@ -658,7 +645,7 @@ public abstract class Shell implements Closeable {
     public interface Task {
         /**
          * This method will be called when a task is executed by a shell.
-         * Calling {@link Closeable#close()} on any stream is NOP (does nothing).
+         * Calling {@link Closeable#close()} on all streams is NOP (does nothing).
          * @param stdin the STDIN of the shell.
          * @param stdout the STDOUT of the shell.
          * @param stderr the STDERR of the shell.
@@ -667,11 +654,6 @@ public abstract class Shell implements Closeable {
         void run(@NonNull OutputStream stdin,
                  @NonNull InputStream stdout,
                  @NonNull InputStream stderr) throws IOException;
-
-        /**
-         * This method will be called when a shell is unable to execute this task.
-         */
-        default void shellDied() {}
     }
 
     /**
@@ -705,12 +687,40 @@ public abstract class Shell implements Closeable {
     public static final int ROOT_MOUNT_MASTER = 2;
 
     /**
-     * For compatibility, setting this flag will set {@link #enableLegacyStderrRedirection}
-     * @deprecated not used anymore
-     * @see #enableLegacyStderrRedirection
+     * @deprecated use {@link #cmd(String...)}
      */
     @Deprecated
-    public static final int FLAG_REDIRECT_STDERR = (1 << 3);
+    @NonNull
+    public static Job su(@NonNull String... commands) {
+        return MainShell.newJob(true, commands);
+    }
+
+    /**
+     * @deprecated use {@link #cmd(String...)}
+     */
+    @Deprecated
+    @NonNull
+    public static Job sh(@NonNull String... commands) {
+        return MainShell.newJob(false, commands);
+    }
+
+    /**
+     * @deprecated use {@link #cmd(InputStream)}
+     */
+    @Deprecated
+    @NonNull
+    public static Job su(@NonNull InputStream in) {
+        return MainShell.newJob(true, in);
+    }
+
+    /**
+     * @deprecated use {@link #cmd(InputStream)}
+     */
+    @Deprecated
+    @NonNull
+    public static Job sh(@NonNull InputStream in) {
+        return MainShell.newJob(false, in);
+    }
 
     /**
      * Whether the application has access to root.
